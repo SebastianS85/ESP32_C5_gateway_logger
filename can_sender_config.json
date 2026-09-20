@@ -7,11 +7,11 @@
     "n_tseg2": "8",
     "n_sjw": "4",
     "d_brp": "1",
-    "d_tseg1": "11",
-    "d_tseg2": "4",
-    "d_sjw": "2",
+    "d_tseg1": "12",
+    "d_tseg2": "3",
+    "d_sjw": "3",
     "gen_count": "100000",
     "gen_interval": "0.5",
     "gen_dlc": "64",
-    "last_csv": "E:/can_log.csv"
+    "last_csv": "C:/Users/smuks/Downloads/CAN-FD_Intrusion_Dataset (1)/CAN-FD_Intrusion_Dataset/CANFD_Flooding.csv"
 }
