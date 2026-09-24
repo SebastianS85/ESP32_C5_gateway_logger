@@ -13,5 +13,5 @@
     "gen_count": "100000",
     "gen_interval": "0.5",
     "gen_dlc": "64",
-    "last_csv": "C:/Users/smuks/Downloads/CAN-FD_Intrusion_Dataset (1)/CAN-FD_Intrusion_Dataset/CANFD_Flooding.csv"
+    "last_csv": "C:/Users/smuks/Downloads/CAN-FD_Intrusion_Dataset (1)/CAN-FD_Intrusion_Dataset/CANFD_Malfunction.csv"
 }

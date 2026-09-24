@@ -1,4 +1,5 @@
 import struct
+import time
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -73,21 +74,34 @@ class LogFileLoaderThread(QThread):
     def run(self):
         try:
             path = Path(self.filename)
-            frame_iterator = iter_esp_binary_frames(path) if path.suffix.lower() == ".bin" else iter_savvycan_asc_frames(path)
+            if path.suffix.lower() == ".bin":
+                frame_iterator = iter_esp_binary_frames(path)
+            else:
+                frame_iterator = iter_savvycan_asc_frames(path)
+                
             frame_batch = []
             frame_count = 0
 
             for frame in frame_iterator:
                 if not self.running:
                     return
+                
                 frame_batch.append(frame)
                 frame_count += 1
-                if len(frame_batch) == 500:
+                
+                # Zoptymalizowany podział: paczki po 2500 ramek zapobiegają dławieniu RAMu
+                if len(frame_batch) >= 2500:
                     self.frames_loaded.emit(frame_batch)
                     frame_batch = []
+                    
+                    # Wymuszenie 10 ms pauzy, aby system odrysował okno ładowania (QProgressDialog)
+                    self.msleep(10)
 
+            # Wysłanie ostatnich ramek, które nie dobiły do 2500
             if frame_batch:
                 self.frames_loaded.emit(frame_batch)
+                self.msleep(10)
+                
             self.load_finished.emit(frame_count)
         except OSError as error:
             self.load_failed.emit(str(error))

@@ -1,128 +1,165 @@
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QAbstractTableModel, QModelIndex, QPointF, QRegularExpression
-from PyQt6.QtGui import QColor, QFont, QPainter, QRegularExpressionValidator
-from .constants import QAbstractTableModel, QColor, QModelIndex, Qt
+from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex
+
 class CANTableModel(QAbstractTableModel):
-    def __init__(self, headers):
+    def __init__(self, frames=None):
         super().__init__()
-        self.headers = headers
-        self.frames = []
-        self.all_frames = []
-        self.max_frames = 5000
-        self.update_existing_ids = False
-        self.enabled_ids = None
+        # Całkowita, nieograniczona historia sesji w tle
+        self.full_history = []
+        
+        self._headers = ["No.", "Time / Delta", "Bus", "CAN ID (Hex)", "DLC", "Payload Data (Hex)", "DBC Signals"]
+        self._is_delta_mode = False
+        self._update_existing_ids = False
+        self._enabled_ids = None
+        
+        # Parametry wirtualnego okna (widzimy np. max 20 000 wierszy naraz dla idealnej płynności)
+        self._window_size = 20000
+        self._window_offset = 0
 
-    def rowCount(self, parent=QModelIndex()): return len(self.frames)
-    def columnCount(self, parent=QModelIndex()): return len(self.headers)
+    def rowCount(self, parent=None):
+        # Tabela zgłasza systemowi tyle wierszy, ile wynosi CAŁA historia, 
+        # dzięki czemu suwak przewijania ma poprawny rozmiar dla 2 milionów ramek!
+        return len(self.full_history)
 
-    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return self.headers[section]
-        return None
+    def columnCount(self, parent=None):
+        return len(self._headers)
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid(): return None
-        frame = self.frames[index.row()]
+        if not index.isValid():
+            return None
+        
+        row = index.row()
+        if row >= len(self.full_history):
+            return None
+
+        # Pobieramy dane bezpośrednio z gigantycznej historii w tle
+        frame = self.full_history[row]
 
         if role == Qt.ItemDataRole.DisplayRole:
             col = index.column()
-            if col == 0: return str(frame['no'])
-            elif col == 1: return frame['time']
-            elif col == 2: return f"CAN {frame['node_id']}"
-            elif col == 3: return frame['id_str']
-            elif col == 4: return str(frame['len'])
-            elif col == 5: return frame['hex_str']
-            elif col == 6: return frame['dbc_str']
+            if col == 0:
+                return str(frame['no'])
+            elif col == 1:
+                return frame['time']
+            elif col == 2:
+                return f"CAN {frame['node_id']}"
+            elif col == 3:
+                clean_id = frame['clean_id']
+                return f"0x{clean_id:03X}" if clean_id <= 0x7FF else f"0x{clean_id:08X} (Ext)"
+            elif col == 4:
+                return str(frame['len'])
+            elif col == 5:
+                return " ".join(f"{b:02X}" for b in frame['raw_data'][:frame['len']])
+            elif col == 6:
+                return frame['dbc_str']
 
-        elif role == Qt.ItemDataRole.BackgroundRole:
-            return QColor(20, 20, 20) if frame['node_id'] == 1 else QColor(24, 24, 28)
-        elif role == Qt.ItemDataRole.ForegroundRole:
-            return QColor(0, 229, 255) if frame['node_id'] == 1 else QColor(100, 221, 235)
-        elif role == Qt.ItemDataRole.TextAlignmentRole:
-            return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         return None
 
-    def add_frames(self, new_frames):
-        if not new_frames:
-            return
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            if 0 <= section < len(self._headers):
+                return self._headers[section]
+        return None
 
-        self.all_frames.extend(new_frames)
-        if self.max_frames is not None and len(self.all_frames) > self.max_frames:
-            self.all_frames = self.all_frames[-self.max_frames:]
-        self._rebuild_visible_frames()
-
-    def _rebuild_visible_frames(self):
-        source_frames = self.all_frames
-        if self.enabled_ids is not None:
-            source_frames = [
-                frame for frame in source_frames
-                if frame.get('clean_id') in self.enabled_ids
-            ]
-
-        if self.update_existing_ids:
-            latest_by_key = {}
-            order = []
-            for frame in source_frames:
-                key = (frame.get('node_id'), frame.get('clean_id'))
-                if key not in latest_by_key:
-                    order.append(key)
-                latest_by_key[key] = frame
-            visible_frames = [latest_by_key[key] for key in order]
-        else:
-            visible_frames = list(source_frames)
-
+    def update_headers(self, new_headers):
         self.beginResetModel()
-        self.frames = visible_frames
+        self._headers = new_headers
         self.endResetModel()
 
-    def set_enabled_ids(self, enabled_ids):
-        self.enabled_ids = None if enabled_ids is None else set(enabled_ids)
-        self._rebuild_visible_frames()
+    def set_max_frames(self, max_f):
+        pass
 
-    def set_update_existing_ids(self, enabled):
-        enabled = bool(enabled)
-        if self.update_existing_ids == enabled:
+    def set_enabled_ids(self, enabled_ids):
+        self._enabled_ids = enabled_ids
+        self.beginResetModel()
+        self.endResetModel()
+
+    def set_update_existing_ids(self, val):
+        self._update_existing_ids = val
+
+    def update_time_display(self, is_delta):
+        self._is_delta_mode = is_delta
+        self.beginResetModel()
+        self.endResetModel()
+
+    def add_frames(self, new_frames, autoscroll_active=True):
+        """Dodaje nowe ramki z obsługą nadpisywania istniejących ID oraz autoscrolla."""
+        if not new_frames:
+            return
+        
+        filtered = []
+        for fr in new_frames:
+            if self._enabled_ids is not None and fr['clean_id'] not in self._enabled_ids:
+                continue
+            filtered.append(fr)
+
+        if not filtered:
             return
 
-        self.update_existing_ids = enabled
-        self._rebuild_visible_frames()
-
-    def set_max_frames(self, max_frames):
-        self.max_frames = max_frames
-        if max_frames is not None and len(self.all_frames) > max_frames:
-            self.all_frames = self.all_frames[-max_frames:]
-        self._rebuild_visible_frames()
-
-    def update_time_display(self, show_delta):
-        previous_timestamps = {}
-        for frame in self.frames:
-            timestamp = frame.get('timestamp')
-            if timestamp is None:
-                continue
-
-            display_key = (frame.get('node_id'), frame.get('clean_id'))
-            if show_delta:
-                previous_timestamp = previous_timestamps.get(display_key)
-                if previous_timestamp is None:
-                    frame['time'] = "0 ms"
+        # Jeśli włączona jest opcja nadpisywania po ID (Update Existing IDs)
+        if getattr(self, '_update_existing_ids', False):
+            # Tworzymy słownik szybkiego dostępu do pozycji ID w pełnej historii
+            # (zakładając, że szukamy ostatnio dodanych lub mapujemy ID -> indeks)
+            updated_any = False
+            
+            for fr in filtered:
+                target_id = fr['clean_id']
+                # Szukamy czy to ID już istnieje w pełnej historii
+                found_idx = -1
+                for idx, existing_fr in enumerate(self.full_history):
+                    if existing_fr['clean_id'] == target_id:
+                        found_idx = idx
+                        break
+                
+                if found_idx != -1:
+                    # NADPISUJEMY w miejscu w pełnej historii
+                    self.full_history[found_idx] = fr
+                    updated_any = True
                 else:
-                    delta_ms = timestamp - previous_timestamp
-                    frame['time'] = f"+{delta_ms} ms" if delta_ms >= 0 else f"{delta_ms} ms"
+                    # Jeśli nie ma, dopisujemy na koniec historii
+                    self.full_history.append(fr)
+            
+            # Jeśli coś się zmieniło, odświeżamy widok tabeli
+            if updated_any:
+                top_left = self.index(0, 0)
+                bottom_right = self.index(len(self.full_history) - 1, len(self._headers) - 1)
+                self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DisplayRole])
             else:
-                frame['time'] = f"{timestamp} ms"
-            previous_timestamps[display_key] = timestamp
+                self.beginResetModel()
+                self.endResetModel()
+            return
 
-        if self.frames:
-            first = self.index(0, 1)
-            last = self.index(len(self.frames) - 1, 1)
-            self.dataChanged.emit(first, last, [Qt.ItemDataRole.DisplayRole])
+        # --- Standardowy tryb (bez nadpisywania) ---
+        total_old_len = len(self.full_history)
+
+        if autoscroll_active:
+            # Tryb LIVE / Autoscroll WŁĄCZjony: nowe ramki idą na samą górę
+            filtered.reverse()
+            count = len(filtered)
+            self.beginInsertRows(QModelIndex(), 0, count - 1)
+            self.full_history[0:0] = filtered
+            self.endInsertRows()
+        else:
+            # Tryb ZAMROŻONY / Autoscroll WYŁĄCZONY: ramki dopisują się na sam dół
+            count = len(filtered)
+            self.beginInsertRows(QModelIndex(), total_old_len, total_old_len + count - 1)
+            self.full_history.extend(filtered)
+            self.endInsertRows()
+    def set_update_existing_ids(self, val):
+        self._update_existing_ids = val
+        
+    def bulk_add_frames(self, new_frames):
+        """Wczytywanie z pliku."""
+        if not new_frames:
+            return
+        total_old_len = len(self.full_history)
+        count = len(new_frames)
+        self.beginInsertRows(QModelIndex(), total_old_len, total_old_len + count - 1)
+        self.full_history.extend(new_frames)
+        self.endInsertRows()
 
     def clear_data(self):
         self.beginResetModel()
-        self.frames.clear()
-        self.all_frames.clear()
+        self.full_history.clear()
         self.endResetModel()
 
-    def update_headers(self, headers):
-        self.headers = headers
-        self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(self.headers) - 1)
-
+    

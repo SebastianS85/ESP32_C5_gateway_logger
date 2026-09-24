@@ -1,8 +1,10 @@
 import struct
 import time
 import threading
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QAbstractTableModel, QModelIndex, QPointF, QRegularExpression
-from .constants import FRAME_SIZE, HEADER_FORMAT, HEADER_SIZE, QThread, dlc_to_len, pyqtSignal, struct, threading, time
+import traceback
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from .constants import FRAME_SIZE, HEADER_FORMAT, HEADER_SIZE, dlc_to_len, CANTOOLS_AVAILABLE
+
 class DataProcessorThread(QThread):
     frames_ready = pyqtSignal(list)
 
@@ -70,129 +72,135 @@ class DataProcessorThread(QThread):
             return res
 
     def run(self):
+        print("[DEBUG] DataProcessorThread wystartował pomyślnie.")
         accumulated_gui_frames = []
         last_gui_emit = time.perf_counter()
 
         while self.running:
-            if self.is_paused:
-                time.sleep(0.05)
-                continue
+            try:
+                if self.is_paused:
+                    time.sleep(0.05)
+                    continue
 
-            batch = []
-            while self.incoming_buffer:
-                batch.append(self.incoming_buffer.popleft())
+                batch = []
+                while self.incoming_buffer and len(batch) < 1000:
+                    batch.append(self.incoming_buffer.popleft())
 
-            if batch:
-                processed_frames = []
-                local_frames, local_bytes = 0, 0
-                
-                with self.stats_lock:
-                    for data in batch:
-                        if len(data) != FRAME_SIZE: 
-                            continue
-                        
-                        try:
-                            timestamp, node_id, can_id, dlc = struct.unpack_from(HEADER_FORMAT, data, 0)
-                            actual_len = dlc_to_len(dlc)
-                            if actual_len < 0 or actual_len > 64: actual_len = 8
-                                
-                            raw_data = data[10 : 10 + actual_len]
-                            self.total_frames += 1
-                            local_frames += 1
-                            local_bytes += (HEADER_SIZE + actual_len)
-                            
-                            if timestamp > self.max_esp_timestamp:
-                                self.max_esp_timestamp = timestamp
-
-                            clean_id = can_id & 0x1FFFFFFF 
-                            arrival_key = (node_id, clean_id)
-                            previous_timestamp = self.last_arrival_timestamp.get(arrival_key)
-                            self.last_arrival_timestamp[arrival_key] = timestamp
-                            
-                            if clean_id == self.sniffer_target_id:
-                                self.latest_sniffed_data = raw_data[:actual_len]
-                            
-                            if clean_id in self.id_last_timestamp:
-                                dt = (timestamp - self.id_last_timestamp[clean_id]) / 1000.0
-                                if dt > 0:
-                                    inst_hz = 1.0 / dt
-                                    old_hz = self.id_frequencies.get(clean_id, inst_hz)
-                                    self.id_frequencies[clean_id] = 0.8 * old_hz + 0.2 * inst_hz
-                            
-                            self.id_last_timestamp[clean_id] = timestamp
-                            self.id_statistics[clean_id] = self.id_statistics.get(clean_id, 0) + 1
-
-                            if node_id == 1: self.bus1_count += 1
-                            elif node_id == 2: self.bus2_count += 1
-
-                            for idx, (t_id, t_byte) in enumerate(self.chart_targets):
-                                if t_id != -1 and clean_id == t_id and 0 <= t_byte < actual_len:
-                                    self.chart_buffers[idx].append((timestamp / 1000.0, raw_data[t_byte]))
-
-                            if self.selected_bus_idx == 1 and node_id != 1: continue
-                            if self.selected_bus_idx == 2 and node_id != 2: continue
-
-                            if self.filter_text:
-                                matched = False
-                                try:
-                                    if "-" in self.filter_text:
-                                        p = self.filter_text.split("-")
-                                        if int(p[0].strip(), 16) <= clean_id <= int(p[1].strip(), 16): matched = True
-                                    else:
-                                        if clean_id == int(self.filter_text.replace("0x", ""), 16): matched = True
-                                except ValueError: pass
-                                if not matched: continue
-
-                            if self.is_delta_mode:
-                                if previous_timestamp is None: time_val_str = "0 ms"
-                                else:
-                                    delta_ms = timestamp - previous_timestamp
-                                    time_val_str = f"+{delta_ms} ms" if delta_ms >= 0 else f"{delta_ms} ms"
-                            else:
-                                time_val_str = f"{timestamp} ms"
-
-                            if self.enabled_ids is not None and clean_id not in self.enabled_ids:
+                if batch:
+                    processed_frames = []
+                    local_frames, local_bytes = 0, 0
+                    
+                    with self.stats_lock:
+                        for data in batch:
+                            if len(data) != FRAME_SIZE: 
+                                print(f"[DEBUG_WARN] Niepoprawny rozmiar ramki: {len(data)} (oczekiwano {FRAME_SIZE})")
                                 continue
-
-                            hex_str = " ".join(f"{b:02X}" for b in raw_data)
-                            id_str = f"0x{clean_id:03X}" if clean_id <= 0x7FF else f"0x{clean_id:08X} (Ext)"
                             
-                            dbc_str = "-"
-                            if self.db and CANTOOLS_AVAILABLE:
-                                try:
-                                    decoded = self.db.decode_message(clean_id, bytes(raw_data))
-                                    dbc_str = ", ".join([f"{k}={v}" for k, v in decoded.items()])
-                                except Exception:
-                                    pass
+                            try:
+                                timestamp, node_id, can_id, dlc = struct.unpack_from(HEADER_FORMAT, data, 0)
+                                actual_len = dlc_to_len(dlc)
+                                if actual_len < 0 or actual_len > 64: actual_len = 8
+                                    
+                                raw_data = data[10 : 10 + actual_len]
+                                self.total_frames += 1
+                                local_frames += 1
+                                local_bytes += (HEADER_SIZE + actual_len)
+                                
+                                if timestamp > self.max_esp_timestamp:
+                                    self.max_esp_timestamp = timestamp
 
-                            processed_frames.append({
-                                'no': self.total_frames, 'timestamp': timestamp, 'time': time_val_str, 'node_id': node_id,
-                                'id_str': id_str, 'len': actual_len, 'hex_str': hex_str,
-                                'dbc_str': dbc_str, 'clean_id': clean_id, 'raw_data': raw_data
-                            })
+                                clean_id = can_id & 0x1FFFFFFF 
+                                arrival_key = (node_id, clean_id)
+                                previous_timestamp = self.last_arrival_timestamp.get(arrival_key)
+                                self.last_arrival_timestamp[arrival_key] = timestamp
+                                
+                                if clean_id == self.sniffer_target_id:
+                                    self.latest_sniffed_data = raw_data[:actual_len]
+                                
+                                if clean_id in self.id_last_timestamp:
+                                    dt = (timestamp - self.id_last_timestamp[clean_id]) / 1000.0
+                                    if dt > 0:
+                                        inst_hz = 1.0 / dt
+                                        old_hz = self.id_frequencies.get(clean_id, inst_hz)
+                                        self.id_frequencies[clean_id] = 0.8 * old_hz + 0.2 * inst_hz
+                                
+                                self.id_last_timestamp[clean_id] = timestamp
+                                self.id_statistics[clean_id] = self.id_statistics.get(clean_id, 0) + 1
+
+                                if node_id == 1: self.bus1_count += 1
+                                elif node_id == 2: self.bus2_count += 1
+
+                                for idx, (t_id, t_byte) in enumerate(self.chart_targets):
+                                    if t_id != -1 and clean_id == t_id and 0 <= t_byte < actual_len:
+                                        self.chart_buffers[idx].append((timestamp / 1000.0, raw_data[t_byte]))
+
+                                if self.selected_bus_idx == 1 and node_id != 1: continue
+                                if self.selected_bus_idx == 2 and node_id != 2: continue
+
+                                if self.filter_text:
+                                    matched = False
+                                    try:
+                                        if "-" in self.filter_text:
+                                            p = self.filter_text.split("-")
+                                            if int(p[0].strip(), 16) <= clean_id <= int(p[1].strip(), 16): matched = True
+                                        else:
+                                            if clean_id == int(self.filter_text.replace("0x", ""), 16): matched = True
+                                    except ValueError: pass
+                                    if not matched: continue
+
+                                if self.is_delta_mode:
+                                    if previous_timestamp is None: time_val_str = "0 ms"
+                                    else:
+                                        delta_ms = timestamp - previous_timestamp
+                                        time_val_str = f"+{delta_ms} ms" if delta_ms >= 0 else f"{delta_ms} ms"
+                                else:
+                                    time_val_str = f"{timestamp} ms"
+
+                                if self.enabled_ids is not None and clean_id not in self.enabled_ids:
+                                    continue
+
+                                hex_str = " ".join(f"{b:02X}" for b in raw_data)
+                                id_str = f"0x{clean_id:03X}" if clean_id <= 0x7FF else f"0x{clean_id:08X} (Ext)"
+                                
+                                dbc_str = "-"
+                                if self.db and CANTOOLS_AVAILABLE:
+                                    try:
+                                        decoded = self.db.decode_message(clean_id, bytes(raw_data))
+                                        dbc_str = ", ".join([f"{k}={v}" for k, v in decoded.items()])
+                                    except Exception:
+                                        pass
+
+                                processed_frames.append({
+                                    'no': self.total_frames, 'timestamp': timestamp, 'time': time_val_str, 'node_id': node_id,
+                                    'id_str': id_str, 'len': actual_len, 'hex_str': hex_str,
+                                    'dbc_str': dbc_str, 'clean_id': clean_id, 'raw_data': tuple(raw_data)
+                                })
+                                
+                            except Exception as e_inner:
+                                print(f"[DEBUG_ERR] Błąd wewnętrzny przetwarzania pojedynczej ramki: {e_inner}")
+                                traceback.print_exc()
                             
-                        except struct.error:
-                            continue
-                        except Exception:
-                            continue
-                        
-                    self.frames_in_last_sec += local_frames
-                    self.bytes_in_last_sec += local_bytes
+                        self.frames_in_last_sec += local_frames
+                        self.bytes_in_last_sec += local_bytes
 
-                if processed_frames:
-                    accumulated_gui_frames.extend(processed_frames)
+                    if processed_frames:
+                        accumulated_gui_frames.extend(processed_frames)
 
-            now = time.perf_counter()
-            if len(accumulated_gui_frames) >= 200 or (now - last_gui_emit) >= 0.05:
-                if accumulated_gui_frames:
-                    self.frames_ready.emit(accumulated_gui_frames)
-                    accumulated_gui_frames = []
-                last_gui_emit = now
+                now = time.perf_counter()
+                if len(accumulated_gui_frames) >= 200 or (now - last_gui_emit) >= 0.05 or (not self.incoming_buffer and accumulated_gui_frames):
+                    if accumulated_gui_frames:
+                        self.frames_ready.emit(accumulated_gui_frames)
+                        accumulated_gui_frames = []
+                    last_gui_emit = now
 
-            if not batch:
-                time.sleep(0.005)
+                if not batch:
+                    time.sleep(0.005)
+
+            except Exception as e_outer:
+                print(f"[DEBUG_CRITICAL] Krytyczny błąd w pętli DataProcessorThread: {e_outer}")
+                traceback.print_exc()
 
     def stop(self):
+        print("[DEBUG] Zatrzymywanie DataProcessorThread...")
         self.running = False
         self.wait()
-

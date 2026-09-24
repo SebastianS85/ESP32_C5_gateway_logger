@@ -19,13 +19,16 @@ from PyQt6.QtWidgets import (
 )
 
 # --- LOGGING CONFIGURATION ---
+log_handlers = [logging.FileHandler("can_python_errors.log", encoding='utf-8')]
+
+# Jeśli aplikacja NIE JEST uruchomiona jako skompilowany .exe, dodaj logowanie do konsoli
+if not getattr(sys, 'frozen', False):
+    log_handlers.append(logging.StreamHandler(sys.stdout))
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.FileHandler("can_python_errors.log", encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=log_handlers
 )
 
 try:
@@ -110,7 +113,10 @@ TRANSLATIONS = {
         "bridge_manip_group": "Manipulacja ID mostu (CAN1 -> CAN2, demo)", "bridge_manip_enable": "Włącz zamianę ramki",
         "bridge_manip_filter_enable": "Tylko dla oryginalnego ID:", "bridge_manip_new_id": "Nowe CAN ID (Hex):", "bridge_manip_ext": "Extended ID",
         "bridge_manip_data": "Nowe dane (Hex):",
-        "btn_apply_bridge_manip": "Zastosuj"
+        "btn_apply_bridge_manip": "Zastosuj",
+        "msg_loading_title": "Proszę czekać",
+        "msg_loading_text": "Trwa wczytywanie i parsowanie logów CAN...",
+        "msg_loaded_frames": "Wczytano {} ramek CAN."
     },
     "EN": {
         "title": "ESP32 CAN-FD Analyzer", 
@@ -137,7 +143,10 @@ TRANSLATIONS = {
         "bridge_manip_group": "Bridge Frame Replace (CAN1 -> CAN2, demo)", "bridge_manip_enable": "Enable frame replace",
         "bridge_manip_filter_enable": "Only for original ID:", "bridge_manip_new_id": "New CAN ID (Hex):", "bridge_manip_ext": "Extended ID",
         "bridge_manip_data": "New Data (Hex):",
-        "btn_apply_bridge_manip": "Apply"
+        "btn_apply_bridge_manip": "Apply",
+        "msg_loading_title": "Please wait",
+        "msg_loading_text": "Loading and parsing CAN logs...",
+        "msg_loaded_frames": "Loaded {} CAN frames."
     },
     "DE": {
         "title": "ESP32 CAN-FD Analyzer", 
@@ -164,7 +173,10 @@ TRANSLATIONS = {
         "bridge_manip_group": "Bridge-Frame-Ersatz (CAN1 -> CAN2, Demo)", "bridge_manip_enable": "Frame-Ersatz aktivieren",
         "bridge_manip_filter_enable": "Nur für originale ID:", "bridge_manip_new_id": "Neue CAN ID (Hex):", "bridge_manip_ext": "Extended ID",
         "bridge_manip_data": "Neue Daten (Hex):",
-        "btn_apply_bridge_manip": "Anwenden"
+        "btn_apply_bridge_manip": "Anwenden",
+        "msg_loading_title": "Bitte warten",
+        "msg_loading_text": "CAN-Logs werden geladen und geparst...",
+        "msg_loaded_frames": "{} CAN-Frames geladen."
     }
 }
 
@@ -223,4 +235,3 @@ def manipulate_can_id(can_id, set_bits=0, clear_bits=0, toggle_bits=0, extended=
     result |= set_bits
     result ^= toggle_bits
     return result & mask
-

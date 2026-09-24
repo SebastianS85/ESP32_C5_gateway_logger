@@ -10,21 +10,30 @@ from PyQt6.QtWidgets import (
     QMainWindow, QPushButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget, QHBoxLayout, 
     QCheckBox, QLineEdit, QComboBox, QMessageBox, QTabWidget,
-    QFileDialog, QGroupBox, QFormLayout, QScrollArea, QFrame
+    QFileDialog, QGroupBox, QFormLayout, QScrollArea, QFrame,
+    QProgressDialog
 )
-from .constants import APP_DISPLAY_MODE_BRIDGE, APP_DISPLAY_MODE_SD_LOGGER, APP_DISPLAY_MODE_TCP_SERVER, BRIDGE_ID_MANIP_FORMAT, CAN_CONFIG_MAGIC, CAN_CONTROL_FORMAT, CANTOOLS_AVAILABLE, CHARTS_AVAILABLE, FRAME_SIZE, HEADER_FORMAT, TCP_PACKET_HEADER_FORMAT, TCP_PACKET_TYPE_BRIDGE_ID_MANIP, TCP_PACKET_TYPE_CAN_CONTROL, TCP_PACKET_TYPE_CAN_FRAME, TCP_PACKET_TYPE_MODE_CONTROL, QCheckBox, QColor, QComboBox, QFileDialog, QFont, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPainter, QPointF, QPushButton, QRegularExpression, QRegularExpressionValidator, QScrollArea, QTabWidget, QTableView, QTableWidget, QTableWidgetItem, QTimer, QVBoxLayout, QWidget, Qt, TCP_IP, TCP_PORT, TRANSLATIONS, csv, deque, len_to_dlc, logging, os, save_config, struct
+from .constants import (
+    APP_DISPLAY_MODE_BRIDGE, APP_DISPLAY_MODE_SD_LOGGER, APP_DISPLAY_MODE_TCP_SERVER, 
+    BRIDGE_ID_MANIP_FORMAT, CAN_CONFIG_MAGIC, CAN_CONTROL_FORMAT, CANTOOLS_AVAILABLE, 
+    CHARTS_AVAILABLE, FRAME_SIZE, HEADER_FORMAT, TCP_PACKET_HEADER_FORMAT, 
+    TCP_PACKET_TYPE_BRIDGE_ID_MANIP, TCP_PACKET_TYPE_CAN_CONTROL, TCP_PACKET_TYPE_CAN_FRAME, 
+    TCP_PACKET_TYPE_MODE_CONTROL, TCP_IP, TCP_PORT, TRANSLATIONS, len_to_dlc, save_config
+)
 
 if CANTOOLS_AVAILABLE:
-    from .constants import cantools
+    import cantools
 
 if CHARTS_AVAILABLE:
-    from .constants import QChart, QChartView, QLineSeries, QValueAxis
+    from PyQt6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
+
 from .log_io import LogFileLoaderThread
 from .models import CANTableModel
 from .processing import DataProcessorThread
 from .settings import load_settings, save_settings
 from .transport import CyclicSenderThread, TCPReceiverThread
 from .widgets import BitGridWidget
+
 class CANViewerFullWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -41,6 +50,7 @@ class CANViewerFullWindow(QMainWindow):
         self.chart_start_t = None
         self._mode_remote_enabled = False
         self._current_mode = None
+        self.is_bulk_loading = False
 
         self.setup_ui()
 
@@ -51,7 +61,6 @@ class CANViewerFullWindow(QMainWindow):
         self.processor_thread = DataProcessorThread(self.incoming_buffer)
         self.processor_thread.frames_ready.connect(self.on_frames_ready)
         self.processor_thread.start()
-
         self.retranslate_ui()
         self.restore_ui_settings()
 
@@ -66,10 +75,9 @@ class CANViewerFullWindow(QMainWindow):
         self.speed_timer.timeout.connect(self.update_periodic_timers)
         self.speed_timer.start(1000)
 
-        self.scroll_timer = QTimer()
-        self.scroll_timer.timeout.connect(self.check_autoscroll)
-        self.scroll_timer.start(100)
-
+        # self.scroll_timer = QTimer()
+        #self.scroll_timer.timeout.connect(self.check_autoscroll)
+        #self.scroll_timer.start(100)
         self.fast_ui_timer = QTimer()
         self.fast_ui_timer.timeout.connect(self.update_fast_ui)
         self.fast_ui_timer.start(65)
@@ -208,9 +216,13 @@ class CANViewerFullWindow(QMainWindow):
         self.table = QTableView()
         self.table_model = CANTableModel([])
         self.table.setModel(self.table_model)
+        
         self.table.verticalHeader().setVisible(False) 
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.table.verticalHeader().setDefaultSectionSize(24)
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
+        
         self.table.setColumnWidth(0, 80)
         self.table.setColumnWidth(1, 100)
         self.table.setColumnWidth(2, 60)
@@ -514,7 +526,6 @@ class CANViewerFullWindow(QMainWindow):
         parent_layout.addWidget(group)
         return arbitration_combo, data_combo
 
-
     def save_and_reconnect_ip(self):
         new_ip = self.ip_input.text().strip()
         if new_ip and new_ip != self.tcp_thread.ip:
@@ -588,11 +599,59 @@ class CANViewerFullWindow(QMainWindow):
         self.send_settings_to_thread()
 
     def on_frames_ready(self, processed_frames):
-        self.table_model.add_frames(processed_frames)
+        is_file_loading = bool(self.log_loader_thread and self.log_loader_thread.isRunning()) or getattr(self, 'is_bulk_loading', False)
+
+        if is_file_loading:
+            self.table_model.bulk_add_frames(processed_frames)
+        else:
+            # 1. Sprawdzamy stan checkboxa i przycisku pauzy
+            autoscroll_on = self.autoscroll_cb.isChecked()
+            is_paused = self.pause_btn.isChecked()
+
+            # 2. Przekazujemy paczkę do modelu (góra lub dół w zależności od autoscrolla)
+            self.table_model.add_frames(processed_frames, autoscroll_active=autoscroll_on)
+            
+            # 3. Jeśli autoscroll jest włączony i nie pauzujemy - BEZWZGLĘDNIE wymuszamy przesunięcie suwaka na samą górę (0)
+            if autoscroll_on and not is_paused and self.tabs.currentIndex() == 0:
+                scrollbar = self.table.verticalScrollBar()
+                if scrollbar:
+                    scrollbar.setValue(0)
+
+    def _wait_for_processor_to_finish(self):
+        if len(self.incoming_buffer) > 0:
+            return
+
+        self.check_queue_timer.stop()
+        
+        # Wyłączamy flagę masowego ładowania
+        self.is_bulk_loading = False
+        
+        # Pełny reset i odświeżenie widoku tabeli po zakończeniu pliku
+        self.table_model.layoutChanged.emit()
+        self.table.setUpdatesEnabled(True)
+        
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.accept()
+            self.progress_dialog = None
+            
+        self.load_log_btn.setEnabled(True)
+        QTimer.singleShot(500, self._show_success_popup)
 
     def check_autoscroll(self):
-        if (not self.pause_btn.isChecked() and self.autoscroll_cb.isChecked() and
-                self.tabs.currentIndex() == 0):
+        if self.pause_btn.isChecked() or not self.autoscroll_cb.isChecked() or self.tabs.currentIndex() != 0:
+            return
+
+        # Pobieramy pionowy pasek przewijania tabeli
+        scrollbar = self.table.verticalScrollBar()
+        if not scrollbar:
+            return
+
+        # Sprawdzamy czy użytkownik jest na samym dole (lub bardzo blisko dołu, np. w granicach 20 pikseli)
+        is_at_bottom = scrollbar.value() >= (scrollbar.maximum() - 20)
+
+        # Przewijamy do dołu tylko wtedy, gdy użytkownik faktycznie był na dole 
+        # (zapobiega to zacinaniu, gdy próbujesz przewinąć tabelę w górę)
+        if is_at_bottom:
             self.table.scrollToBottom()
 
     def update_delta_display(self, _state=None):
@@ -717,6 +776,7 @@ class CANViewerFullWindow(QMainWindow):
 
     def load_log_file(self):
         if self.log_loader_thread and self.log_loader_thread.isRunning():
+            
             return
 
         filename, _ = QFileDialog.getOpenFileName(
@@ -731,20 +791,92 @@ class CANViewerFullWindow(QMainWindow):
         if not self.pause_btn.isChecked():
             self.pause_btn.setChecked(True)
             self.toggle_pause()
+            
         self.table_model.set_max_frames(None)
         self.clear_table()
         self.load_log_btn.setEnabled(False)
+
+        # Włączamy tryb masowego (cichego) ładowania
+        self.is_bulk_loading = True
+        self.table.setUpdatesEnabled(False)
+
+        loading_text = self.get_t("msg_loading_text")
+        if loading_text == "msg_loading_text": loading_text = "Trwa wczytywanie i parsowanie logów CAN..."
+        
+        loading_title = self.get_t("msg_loading_title")
+        if loading_title == "msg_loading_title": loading_title = "Proszę czekać"
+
+        self.progress_dialog = QProgressDialog(loading_text, None, 0, 0, self)
+        self.progress_dialog.setWindowTitle(loading_title)
+        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.progress_dialog.setCancelButton(None)
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.show()
+
         self.log_loader_thread = LogFileLoaderThread(filename)
         self.log_loader_thread.frames_loaded.connect(self.incoming_buffer.extend)
         self.log_loader_thread.load_finished.connect(self.on_log_load_finished)
         self.log_loader_thread.load_failed.connect(self.on_log_load_failed)
         self.log_loader_thread.start()
 
-    def on_log_load_finished(self, frame_count):
+    def on_log_load_finished(self):
+        """Wywoływane automatycznie po zakończeniu ładowania pliku logów."""
+        if self.progress_dialog:
+            self.progress_dialog.close()
+            self.progress_dialog = None
+            
         self.load_log_btn.setEnabled(True)
-        QMessageBox.information(self, self.get_t("msg_succ"), f"Loaded {frame_count:,} CAN frames.")
+        
+        # --- KLUCZOWY RESET PO WGRANIU PLIKU ---
+        # 1. Wyłączamy tryb masowego ładowania
+        self.is_bulk_loading = False
+        
+        # 2. Włączamy z powrotem odświeżanie graficzne tabeli wyłączone na czas wczytywania
+        self.table.setUpdatesEnabled(True)
+        
+        # 3. Odświeżamy model, żeby tabela poprawnie wyświetliła wczytane dane
+        self.table_model.beginResetModel()
+        self.table_model.endResetModel()
+        
+        # 4. Jeśli autoscroll był zaznaczony, ustawiamy widok na samą górę
+        if self.autoscroll_cb.isChecked():
+            self.table.scrollToTop()
+            self.table.verticalScrollBar().setValue(0)
+
+    def _wait_for_processor_to_finish(self):
+        if len(self.incoming_buffer) > 0:
+            return
+
+        self.check_queue_timer.stop()
+        
+       
+        self.table_model.layoutChanged.emit()
+        
+        self.table.setUpdatesEnabled(True)
+        
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.accept()
+            self.progress_dialog = None
+            
+        self.load_log_btn.setEnabled(True)
+        QTimer.singleShot(500, self._show_success_popup)
+
+    def _show_success_popup(self):
+        template = self.get_t("msg_loaded_frames")
+        if template == "msg_loaded_frames":
+            msg = f"Załadowano {self.total_loaded_frames:,} ramek CAN."
+        else:
+            msg = template.format(f"{self.total_loaded_frames:,}")
+            
+        QMessageBox.information(self, self.get_t("msg_succ"), msg)
 
     def on_log_load_failed(self, message):
+        self.table.setUpdatesEnabled(True)
+        
+        if hasattr(self, 'progress_dialog') and self.progress_dialog:
+            self.progress_dialog.reject()
+            self.progress_dialog = None
+            
         self.load_log_btn.setEnabled(True)
         QMessageBox.critical(self, self.get_t("msg_err"), message)
 
@@ -761,16 +893,36 @@ class CANViewerFullWindow(QMainWindow):
                 self.chart_points[i].clear()
                 self.series_list[i].replace([])
         self.send_settings_to_thread()
+        
+        # --- KLUCZOWY FIX DLA WIDOKU ---
+        # Przypisanie modelu na nowo "odświeża" silnik paska przewijania w PyQt
+        self.table.setModel(None)
+        self.table.setModel(self.table_model)
+        
+        if self.autoscroll_cb.isChecked():
+            self.table.scrollToTop()
+            self.table.verticalScrollBar().setValue(0)
 
     def toggle_pause(self):
         is_paused = self.pause_btn.isChecked()
         self.tcp_thread.set_connection_enabled(not is_paused)
+        
         if is_paused:
             self.autoscroll_cb.setChecked(False)
             self.pause_btn.setText(self.get_t("resume"))
         else:
-            self.table_model.set_max_frames(5000)
             self.pause_btn.setText(self.get_t("pause"))
+            
+            if hasattr(self, 'log_loader_thread') and self.log_loader_thread:
+                pass 
+            setattr(self, 'is_bulk_loading', False)
+            
+            # Włączamy z powrotem autoscroll i fizycznie resetujemy suwak na górę
+            self.autoscroll_cb.setChecked(True)
+            self.table.verticalScrollBar().setValue(0)
+            
+        self.send_settings_to_thread()
+            
         self.send_settings_to_thread()
 
     def change_language(self, index):
@@ -779,84 +931,97 @@ class CANViewerFullWindow(QMainWindow):
 
     def retranslate_ui(self):
         t = TRANSLATIONS[self.current_lang]
-        self.setWindowTitle(t["title"])
-        self.load_dbc_btn.setText(t["load_dbc"])
-        self.load_log_btn.setText(t["load_log"])
-        self.channel_label.setText(t["channel"])
-        self.ip_label.setText(t["ip_label"])
+        self.setWindowTitle(t.get("title", "title"))
+        self.load_dbc_btn.setText(t.get("load_dbc", "load_dbc"))
+        self.load_log_btn.setText(t.get("load_log", "load_log"))
+        self.channel_label.setText(t.get("channel", "channel"))
+        self.ip_label.setText(t.get("ip_label", "ip_label"))
         
         current_bus_idx = self.bus_filter_combo.currentIndex()
         self.bus_filter_combo.blockSignals(True) 
         self.bus_filter_combo.clear()
-        self.bus_filter_combo.addItems([t["all_channels"], "CAN 1", "CAN 2"])
+        self.bus_filter_combo.addItems([t.get("all_channels", "all_channels"), "CAN 1", "CAN 2"])
         if current_bus_idx != -1: self.bus_filter_combo.setCurrentIndex(current_bus_idx)
         self.bus_filter_combo.blockSignals(False)
         
-        self.filter_label.setText(t["filter_id"])
-        self.filter_input.setPlaceholderText(t["filter_ph"])
-        self.id_filter_group.setTitle(t["id_list"])
-        self.select_all_ids_btn.setText(t["select_all"])
-        self.select_none_ids_btn.setText(t["select_none"])
-        self.id_filter_enabled_cb.setText(t["id_filter_enabled"])
-        self.delta_cb.setText(t["delta_time"])
-        self.update_existing_ids_cb.setText(t["update_existing_ids"])
-        self.autoscroll_cb.setText(t["autoscroll"])
-        self.pause_btn.setText(t["resume"] if self.pause_btn.isChecked() else t["pause"])
-        self.clear_btn.setText(t["clear"])
-        self.export_btn.setText(t["export_csv"])
+        self.filter_label.setText(t.get("filter_id", "filter_id"))
+        self.filter_input.setPlaceholderText(t.get("filter_ph", "filter_ph"))
+        self.id_filter_group.setTitle(t.get("id_list", "id_list"))
+        self.select_all_ids_btn.setText(t.get("select_all", "select_all"))
+        self.select_none_ids_btn.setText(t.get("select_none", "select_none"))
+        self.id_filter_enabled_cb.setText(t.get("id_filter_enabled", "id_filter_enabled"))
+        self.delta_cb.setText(t.get("delta_time", "delta_time"))
+        self.update_existing_ids_cb.setText(t.get("update_existing_ids", "update_existing_ids"))
+        self.autoscroll_cb.setText(t.get("autoscroll", "autoscroll"))
+        self.pause_btn.setText(t.get("resume", "resume") if self.pause_btn.isChecked() else t.get("pause", "pause"))
+        self.clear_btn.setText(t.get("clear", "clear"))
+        self.export_btn.setText(t.get("export_csv", "export_csv"))
         
-        self.table_model.update_headers(t["headers"])
-        self.stats_table.setHorizontalHeaderLabels(t["stats_headers"])
-        self.tabs.setTabText(0, t["tab_monitor"])
-        self.tabs.setTabText(1, t["tab_plots"])
-        self.tabs.setTabText(2, t["tab_stats"])
-        self.tabs.setTabText(3, t["tab_gen"])
-        self.tabs.setTabText(4, t["tab_sniffer"])
-        self.tabs.setTabText(5, t["tab_can_settings"])
-        self.mode_group.setTitle(t["mode_group"])
-        self.set_mode_btn.setText(t["btn_set_mode"])
-        mode_labels = {APP_DISPLAY_MODE_BRIDGE: t["mode_bridge"], APP_DISPLAY_MODE_SD_LOGGER: t["mode_sd"],
-                       APP_DISPLAY_MODE_TCP_SERVER: t["mode_tcp"]}
+        if "headers" in t: self.table_model.update_headers(t["headers"])
+        if "stats_headers" in t: self.stats_table.setHorizontalHeaderLabels(t["stats_headers"])
+        self.tabs.setTabText(0, t.get("tab_monitor", "tab_monitor"))
+        self.tabs.setTabText(1, t.get("tab_plots", "tab_plots"))
+        self.tabs.setTabText(2, t.get("tab_stats", "tab_stats"))
+        self.tabs.setTabText(3, t.get("tab_gen", "tab_gen"))
+        self.tabs.setTabText(4, t.get("tab_sniffer", "tab_sniffer"))
+        self.tabs.setTabText(5, t.get("tab_can_settings", "tab_can_settings"))
+        self.mode_group.setTitle(t.get("mode_group", "mode_group"))
+        self.set_mode_btn.setText(t.get("btn_set_mode", "btn_set_mode"))
+        
+        mode_labels = {
+            APP_DISPLAY_MODE_BRIDGE: t.get("mode_bridge", "mode_bridge"), 
+            APP_DISPLAY_MODE_SD_LOGGER: t.get("mode_sd", "mode_sd"),
+            APP_DISPLAY_MODE_TCP_SERVER: t.get("mode_tcp", "mode_tcp")
+        }
         for i in range(self.mode_combo.count()):
             self.mode_combo.setItemText(i, mode_labels[self.mode_combo.itemData(i)])
+            
         self.mode_remote_status_label.setText(
-            t["mode_remote_on"] if getattr(self, "_mode_remote_enabled", False) else t["mode_remote_off"]
+            t.get("mode_remote_on", "mode_remote_on") if getattr(self, "_mode_remote_enabled", False) else t.get("mode_remote_off", "mode_remote_off")
         )
+        
         current_mode = getattr(self, "_current_mode", None)
         self.mode_current_label.setText(
-            t["mode_current"].format(mode_labels.get(current_mode, "-"))
+            t.get("mode_current", "mode_current: {}").format(mode_labels.get(current_mode, "-"))
         )
-        self.bridge_manip_group.setTitle(t["bridge_manip_group"])
-        self.bridge_manip_enable_cb.setText(t["bridge_manip_enable"])
-        self.lbl_bridge_manip_filter.setText(t["bridge_manip_filter_enable"])
-        self.lbl_bridge_manip_new_id.setText(t["bridge_manip_new_id"])
-        self.bridge_manip_ext_id_cb.setText(t["bridge_manip_ext"])
-        self.lbl_bridge_manip_data.setText(t["bridge_manip_data"])
-        self.bridge_manip_apply_btn.setText(t["btn_apply_bridge_manip"])
-        self.form_group.setTitle(t["tab_gen"])
+        
+        self.bridge_manip_group.setTitle(t.get("bridge_manip_group", "bridge_manip_group"))
+        self.bridge_manip_enable_cb.setText(t.get("bridge_manip_enable", "bridge_manip_enable"))
+        self.lbl_bridge_manip_filter.setText(t.get("bridge_manip_filter_enable", "bridge_manip_filter_enable"))
+        self.lbl_bridge_manip_new_id.setText(t.get("bridge_manip_new_id", "bridge_manip_new_id"))
+        self.bridge_manip_ext_id_cb.setText(t.get("bridge_manip_ext", "bridge_manip_ext"))
+        self.lbl_bridge_manip_data.setText(t.get("bridge_manip_data", "bridge_manip_data"))
+        self.bridge_manip_apply_btn.setText(t.get("btn_apply_bridge_manip", "btn_apply_bridge_manip"))
+        self.form_group.setTitle(t.get("tab_gen", "tab_gen"))
         self.can1_settings_group.setTitle("CAN 1")
         self.can2_settings_group.setTitle("CAN 2")
         self.can1_apply_settings_btn.setText("Apply CAN 1")
         self.can2_apply_settings_btn.setText("Apply CAN 2")
         
-        self.lbl_bus.setText(t["form_bus"])
-        self.lbl_id.setText(t["form_id"])
-        self.lbl_ext.setText(t["form_ext"])
-        self.lbl_data.setText(t["form_data"])
-        self.lbl_interval.setText(t["form_interval"])
+        self.lbl_bus.setText(t.get("form_bus", "form_bus"))
+        self.lbl_id.setText(t.get("form_id", "form_id"))
+        self.lbl_ext.setText(t.get("form_ext", "form_ext"))
+        self.lbl_data.setText(t.get("form_data", "form_data"))
+        self.lbl_interval.setText(t.get("form_interval", "form_interval"))
 
         if CHARTS_AVAILABLE:
             for i in range(4):
-                self.chart_labels_id[i].setText(f"{t['plot_id']} {i+1}:")
-                self.chart_labels_b[i].setText(t["plot_byte"])
+                self.chart_labels_id[i].setText(f"{t.get('plot_id', 'plot_id')} {i+1}:")
+                self.chart_labels_b[i].setText(t.get("plot_byte", "plot_byte"))
             
-        self.sniffer_id_label.setText(t["sniffer_id"])
-        self.send_once_btn.setText(t["btn_send_once"])
-        self.start_cyclic_btn.setText(t["btn_start_cyclic"])
-        self.stop_cyclic_btn.setText(t["btn_stop_cyclic"])
+        self.sniffer_id_label.setText(t.get("sniffer_id", "sniffer_id"))
+        self.send_once_btn.setText(t.get("btn_send_once", "btn_send_once"))
+        self.start_cyclic_btn.setText(t.get("btn_start_cyclic", "btn_start_cyclic"))
+        self.stop_cyclic_btn.setText(t.get("btn_stop_cyclic", "btn_stop_cyclic"))
         
         with self.processor_thread.stats_lock:
-            self.stats_label.setText(t["stats_summary"].format(self.processor_thread.total_frames, self.processor_thread.bus1_count, self.processor_thread.bus2_count, len(self.processor_thread.id_statistics), self.dbc_filename))
+            self.stats_label.setText(t.get("stats_summary", "stats_summary").format(
+                self.processor_thread.total_frames, 
+                self.processor_thread.bus1_count, 
+                self.processor_thread.bus2_count, 
+                len(self.processor_thread.id_statistics), 
+                self.dbc_filename
+            ))
 
     def build_payload(self):
         target_bus = self.tx_bus_combo.currentIndex() + 1
@@ -958,7 +1123,6 @@ class CANViewerFullWindow(QMainWindow):
         self.save_ui_settings()
         self.stop_cyclic_transmission()
         self.speed_timer.stop()
-        self.scroll_timer.stop()
         self.fast_ui_timer.stop()
         self.tcp_thread.stop()
         self.processor_thread.stop()
