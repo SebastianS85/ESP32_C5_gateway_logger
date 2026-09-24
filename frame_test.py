@@ -418,9 +418,9 @@ class AdvancedCanSender(ctk.CTk):
                     try:
                         current_ts = float(row[0].strip())
                     except ValueError:
-                        continue # Pomiń ewentualny nagłówek
+                        continue 
 
-                    # 2. Wyznaczenie odstępu czasowego (delty) względem poprzedniej ramki
+                    
                     delay_s = 0.0
                     if last_timestamp is not None:
                         delay_s = current_ts - last_timestamp
