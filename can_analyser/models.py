@@ -95,15 +95,14 @@ class CANTableModel(QAbstractTableModel):
         if not filtered:
             return
 
-        # Jeśli włączona jest opcja nadpisywania po ID (Update Existing IDs)
+      
         if getattr(self, '_update_existing_ids', False):
-            # Tworzymy słownik szybkiego dostępu do pozycji ID w pełnej historii
-            # (zakładając, że szukamy ostatnio dodanych lub mapujemy ID -> indeks)
+         
             updated_any = False
             
             for fr in filtered:
                 target_id = fr['clean_id']
-                # Szukamy czy to ID już istnieje w pełnej historii
+                
                 found_idx = -1
                 for idx, existing_fr in enumerate(self.full_history):
                     if existing_fr['clean_id'] == target_id:
@@ -111,14 +110,14 @@ class CANTableModel(QAbstractTableModel):
                         break
                 
                 if found_idx != -1:
-                    # NADPISUJEMY w miejscu w pełnej historii
+                    
                     self.full_history[found_idx] = fr
                     updated_any = True
                 else:
-                    # Jeśli nie ma, dopisujemy na koniec historii
+                    
                     self.full_history.append(fr)
             
-            # Jeśli coś się zmieniło, odświeżamy widok tabeli
+            
             if updated_any:
                 top_left = self.index(0, 0)
                 bottom_right = self.index(len(self.full_history) - 1, len(self._headers) - 1)
@@ -128,18 +127,18 @@ class CANTableModel(QAbstractTableModel):
                 self.endResetModel()
             return
 
-        # --- Standardowy tryb (bez nadpisywania) ---
+       
         total_old_len = len(self.full_history)
 
         if autoscroll_active:
-            # Tryb LIVE / Autoscroll WŁĄCZjony: nowe ramki idą na samą górę
+            
             filtered.reverse()
             count = len(filtered)
             self.beginInsertRows(QModelIndex(), 0, count - 1)
             self.full_history[0:0] = filtered
             self.endInsertRows()
         else:
-            # Tryb ZAMROŻONY / Autoscroll WYŁĄCZONY: ramki dopisują się na sam dół
+           
             count = len(filtered)
             self.beginInsertRows(QModelIndex(), total_old_len, total_old_len + count - 1)
             self.full_history.extend(filtered)
@@ -148,7 +147,7 @@ class CANTableModel(QAbstractTableModel):
         self._update_existing_ids = val
         
     def bulk_add_frames(self, new_frames):
-        """Wczytywanie z pliku."""
+        
         if not new_frames:
             return
         total_old_len = len(self.full_history)
