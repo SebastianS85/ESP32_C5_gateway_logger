@@ -150,7 +150,9 @@ The socket payload is a 74-byte packed binary structure formatted as follows (`<
 
 Create a `partitions.csv` file in your project root:
 ```csv
-# Name,   Type, SubType, Offset,   Size, Flags
-nvs,      data, nvs,     ,         0x6000,
-phy_init, data, phy,     ,         0x1000,
-factory,  app,  factory, ,         3M,
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     ,        0x4000,
+otadata,  data, ota,     ,        0x2000,
+phy_init, data, phy,     ,        0x1000,
+factory,  app,  factory, ,        2M,
+storage,  data, fat,     ,        10M,

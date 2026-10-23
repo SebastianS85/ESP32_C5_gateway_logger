@@ -16,5 +16,5 @@
     "--compile-commands-dir=c:\\esp projects\\espc5_can_fd\\build"
   ],
   "idf.flashType": "UART",
-  "idf.port": "COM25"
+  "idf.port": "COM14"
 }
