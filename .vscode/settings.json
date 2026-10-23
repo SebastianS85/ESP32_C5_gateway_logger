@@ -2,11 +2,12 @@
   "C_Cpp.intelliSenseEngine": "default",
   "idf.extensionActivationMode": "always",
   "idf.openOcdConfigs": [
-    "board/esp32c3-builtin.cfg"
+    "board/esp32c5-builtin.cfg"
   ],
   "idf.currentSetup": "C:\\esp\\v6.0.2\\esp-idf",
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32c3"
+    "IDF_TARGET": "esp32c5",
+    "OPENOCD_USB_ADAPTER_LOCATION": "3-1.3.4.1"
   },
   "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
   "clangd.arguments": [
@@ -15,5 +16,5 @@
     "--compile-commands-dir=c:\\esp projects\\espc5_can_fd\\build"
   ],
   "idf.flashType": "UART",
-  "idf.port": "COM23"
+  "idf.port": "COM25"
 }
