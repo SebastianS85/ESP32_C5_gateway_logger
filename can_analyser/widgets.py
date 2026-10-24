@@ -1,5 +1,5 @@
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QAbstractTableModel, QModelIndex, QPointF, QRegularExpression
-from PyQt6.QtGui import QColor, QFont, QPainter, QRegularExpressionValidator
+from PyQt6.QtGui import QColor, QFont, QPainter, QPalette, QRegularExpressionValidator
 from PyQt6.QtWidgets import (
     QApplication, QHeaderView, QLabel, QTableView,
     QMainWindow, QPushButton, QTableWidget,
@@ -16,8 +16,6 @@ class BitGridWidget(QWidget):
         self.max_bytes = 64
         self.fade_levels = [[0.0 for _ in range(8)] for _ in range(self.max_bytes)]
         self.fade_colors = [[(0,0,0) for _ in range(8)] for _ in range(self.max_bytes)]
-        self.color_0 = QColor(40, 40, 40)       
-        self.color_1 = QColor(200, 200, 200)    
         self.color_up = QColor(255, 50, 50)     
         self.color_down = QColor(50, 150, 255)  
         self.fade_timer = QTimer(self)
@@ -64,18 +62,23 @@ class BitGridWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         cell_w, cell_h, margin_x, margin_y = 30, 30, 40, 20
         painter.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
+        palette = self.palette()
+        label_color = palette.color(QPalette.ColorRole.Text)
+        cell_color = palette.color(QPalette.ColorRole.AlternateBase)
+        one_cell_color = palette.color(QPalette.ColorRole.Button)
+        bit_color = palette.color(QPalette.ColorRole.Text)
         
         for byte_idx in range(len(self.current_data)):
-            painter.setPen(QColor(150, 150, 150))
+            painter.setPen(label_color)
             painter.drawText(5, margin_y + byte_idx * cell_h + 20, f"B{byte_idx:02}:")
             val = self.current_data[byte_idx]
-            painter.setPen(QColor(0, 221, 153))
+            painter.setPen(palette.color(QPalette.ColorRole.Link))
             painter.drawText(margin_x + 8*cell_w + 15, margin_y + byte_idx * cell_h + 20, f"{val:02X}")
             
             for bit_idx in range(8):
                 bit_val = (val >> (7 - bit_idx)) & 1
                 fade = self.fade_levels[byte_idx][bit_idx]
-                base_color = self.color_1 if bit_val else self.color_0
+                base_color = one_cell_color if bit_val else cell_color
                 if fade > 0:
                     target_color = self.fade_colors[byte_idx][bit_idx]
                     r = int(base_color.red() + (target_color.red() - base_color.red()) * fade)
@@ -87,8 +90,7 @@ class BitGridWidget(QWidget):
                     
                 rect_x, rect_y = margin_x + bit_idx * cell_w, margin_y + byte_idx * cell_h
                 painter.setBrush(paint_color)
-                painter.setPen(QColor(30, 30, 30))
+                painter.setPen(palette.color(QPalette.ColorRole.Mid))
                 painter.drawRect(rect_x, rect_y, cell_w - 2, cell_h - 2)
-                painter.setPen(QColor(0, 0, 0) if bit_val else QColor(150, 150, 150))
+                painter.setPen(bit_color)
                 painter.drawText(rect_x + 10, rect_y + 19, str(bit_val))
-

@@ -129,27 +129,19 @@ class CANViewerFullWindow(QMainWindow):
         self.lang_combo.currentIndexChanged.connect(self.change_language)
         
         self.status_label = QLabel("DISCONNECTED")
+        self.status_label.setObjectName("statusLabel")
         self.status_label.setFixedWidth(100)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("background-color: #b71c1c; color: #ffffff; font-weight: bold; padding: 4px; border-radius: 4px;")
+        self.status_label.setProperty("connected", False)
         
         self.ip_label = QLabel("IP:")
-        self.ip_label.setStyleSheet("color: #7bdcff; font-weight: bold; padding: 0 4px;")
+        self.ip_label.setStyleSheet("font-weight: bold; padding: 0 4px;")
 
         self.ip_input = QLineEdit(TCP_IP)
+        self.ip_input.setObjectName("ipInput")
         self.ip_input.setPlaceholderText("192.168.1.x")
         self.ip_input.setFixedWidth(110)
         self.ip_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.ip_input.setStyleSheet(
-            "QLineEdit {"
-            "background-color: #0f1720;"
-            "color: #80ecff;"
-            "border: 1px solid #2d6cdf;"
-            "border-radius: 4px;"
-            "padding: 3px 6px;"
-            "}"
-            "QLineEdit:focus { border: 1px solid #6ec5ff; }"
-        )
         self.ip_input.editingFinished.connect(self.save_and_reconnect_ip)
         
         self.load_dbc_btn = QPushButton()
@@ -166,8 +158,8 @@ class CANViewerFullWindow(QMainWindow):
         self.id_filter_enabled_cb = QCheckBox()
         
         self.speed_label = QLabel()
+        self.speed_label.setObjectName("speedLabel")
         self.speed_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        self.speed_label.setStyleSheet("color: #ffb74d;")
         
         self.pause_btn = QPushButton()
         self.pause_btn.setCheckable(True)
@@ -270,11 +262,21 @@ class CANViewerFullWindow(QMainWindow):
             self.chart_labels_id = []
             self.chart_labels_b = []
             
-            colors = [QColor(255, 80, 80), QColor(80, 255, 80), QColor(80, 180, 255), QColor(255, 200, 80)]
+            light_theme = bool(QApplication.instance().property("canAnalyserLightTheme"))
+            colors = (
+                [QColor(211, 47, 47), QColor(22, 128, 60), QColor(21, 101, 192), QColor(160, 80, 0)]
+                if light_theme
+                else [QColor(255, 80, 80), QColor(80, 255, 80), QColor(80, 180, 255), QColor(255, 200, 80)]
+            )
             self.series_list = []
             
             self.chart = QChart()
-            self.chart.setTheme(QChart.ChartTheme.ChartThemeDark)
+            chart_theme = (
+                QChart.ChartTheme.ChartThemeLight
+                if light_theme
+                else QChart.ChartTheme.ChartThemeDark
+            )
+            self.chart.setTheme(chart_theme)
             self.chart.setBackgroundVisible(False)
             
             hex_validator = QRegularExpressionValidator(QRegularExpression("[0-9A-Fa-f]{1,8}"))
@@ -297,7 +299,7 @@ class CANViewerFullWindow(QMainWindow):
                 inp_id.setPlaceholderText("Hex")
                 
                 lbl_b = QLabel()
-                lbl_b.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+                lbl_b.setStyleSheet("font-size: 11px;")
                 
                 inp_b = QLineEdit()
                 inp_b.setProperty("class", "chartInput")
@@ -361,9 +363,9 @@ class CANViewerFullWindow(QMainWindow):
         stats_tab = QWidget()
         stats_layout = QVBoxLayout(stats_tab)
         self.stats_table = QTableWidget()
+        self.stats_table.setObjectName("statsTable")
         self.stats_table.setColumnCount(5)
         self.stats_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.stats_table.setStyleSheet("QTableWidget { background-color: #141414; color: #ffb74d; gridline-color: #242424; } QHeaderView::section { background-color: #222222; color: #cccccc; padding: 4px; border: none; }")
         stats_layout.addWidget(self.stats_table)
         self.tabs.addTab(stats_tab, "")
 
@@ -535,12 +537,11 @@ class CANViewerFullWindow(QMainWindow):
 
     def update_connection_status(self, is_connected, message):
         self.status_label.setText(message)
-        if is_connected:
-            self.status_label.setStyleSheet("background-color: #1b5e20; color: #ffffff; font-weight: bold; padding: 4px; border-radius: 4px;")
-            self.ip_input.setStyleSheet("background-color: #0f1720; color: #80ecff; border: 1px solid #4caf50; border-radius: 4px; padding: 3px 6px;")
-        else:
-            self.status_label.setStyleSheet("background-color: #b71c1c; color: #ffffff; font-weight: bold; padding: 4px; border-radius: 4px;")
-            self.ip_input.setStyleSheet("background-color: #2b0e0e; color: #ff8080; border: 1px solid #f44336; border-radius: 4px; padding: 3px 6px;")
+        self.status_label.setProperty("connected", is_connected)
+        self.ip_input.setProperty("connected", is_connected)
+        for widget in (self.status_label, self.ip_input):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
 
     def send_settings_to_thread(self):
         filter_text = self.filter_input.text().strip().lower()
@@ -703,10 +704,11 @@ class CANViewerFullWindow(QMainWindow):
                 last_t = id_lasts_copy.get(can_id, 0)
                 
                 item_status = QTableWidgetItem(self.get_t("status_ok"))
-                item_status.setForeground(QColor(76, 175, 80))
+                light_theme = bool(QApplication.instance().property("canAnalyserLightTheme"))
+                item_status.setForeground(QColor(27, 94, 32) if light_theme else QColor(76, 175, 80))
                 if (max_esp_ts - last_t) > 1000:
                     item_status.setText(self.get_t("status_timeout"))
-                    item_status.setForeground(QColor(244, 67, 54))
+                    item_status.setForeground(QColor(183, 28, 28) if light_theme else QColor(244, 67, 54))
 
                 self.stats_table.setItem(row, 0, QTableWidgetItem(f"0x{can_id:03X}"))
                 self.stats_table.setItem(row, 1, QTableWidgetItem(str(count)))

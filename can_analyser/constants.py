@@ -180,38 +180,6 @@ TRANSLATIONS = {
     }
 }
 
-INDUSTRIAL_STYLESHEET = """
-QMainWindow { background-color: #1b1b1b; color: #cccccc; font-family: "Segoe UI", sans-serif; }
-QPushButton { background-color: #2c2c2c; color: #e0e0e0; border: 1px solid #3c3c3c; border-radius: 4px; padding: 6px 10px; font-weight: bold; font-size: 11px; }
-QPushButton:hover { background-color: #383838; border: 1px solid #505050; }
-QPushButton:pressed { background-color: #222222; }
-QPushButton:checked { background-color: #d28e00; color: #111; border: 1px solid #b87a00; }
-QPushButton#btnSendOnce { background-color: #114b7d; border: 1px solid #1f6feb; }
-QPushButton#btnSendOnce:hover { background-color: #1f6feb; }
-QPushButton#btnStartCyclic { background-color: #1b5e20; border: 1px solid #238636; }
-QPushButton#btnStartCyclic:hover { background-color: #238636; }
-QPushButton#btnStopCyclic { background-color: #7a1c1c; border: 1px solid #da3633; }
-QPushButton#btnStopCyclic:hover { background-color: #f85149; }
-QPushButton#btnExport { background-color: #d28e00; color: #111; border: 1px solid #b87a00; }
-QPushButton#btnExport:hover { background-color: #e5a417; }
-QPushButton:disabled { background-color: #181818; color: #555555; border: 1px solid #242424; }
-QLineEdit, QComboBox { background-color: #141414; color: #00dd99; border: 1px solid #333333; border-radius: 3px; padding: 4px; }
-QTabWidget::pane { border: 1px solid #333333; background-color: #161616; }
-QTabBar::tab { background-color: #222222; color: #999999; padding: 6px 14px; border-top-left-radius: 3px; border-top-right-radius: 3px; margin-right: 2px; }
-QTabBar::tab:selected { background-color: #2c2c2c; color: #ffffff; font-weight: bold; }
-QGroupBox { border: 1px solid #383838; border-radius: 4px; margin-top: 8px; font-weight: bold; color: #aaaaaa; }
-QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
-QTableView { background-color: #141414; color: #00e5ff; gridline-color: #242424; outline: none; border: none; }
-QTableView::item:selected { background-color: #2c3e50; }
-QHeaderView::section { background-color: #222222; color: #cccccc; padding: 4px; border: 1px solid #333; }
-QScrollArea { border: none; background-color: transparent; }
-
-/* Chart Specific Styles */
-QFrame#chartControlBar { background-color: #222222; border: 1px solid #333333; border-radius: 6px; }
-QLineEdit.chartInput { background-color: #121212; color: #ffffff; border: 1px solid #444; font-weight: bold; }
-QLineEdit.chartInput:focus { border: 1px solid #6ec5ff; background-color: #1a1a1a; }
-"""
-
 def dlc_to_len(dlc):
     if dlc <= 8: return dlc
     mapping = {9: 12, 10: 16, 11: 20, 12: 24, 13: 32, 14: 48, 15: 64}
